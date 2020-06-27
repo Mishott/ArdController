@@ -4,9 +4,10 @@
 
 #include <OneWire.h>           // комуникация с датчик за температура
 #include <DallasTemperature.h> // датчик за температура
-#include <Bounce2.h>        // за отстраняване на притрепването
-#include <arduino-timer.h>  // Таймер 
+#include <Bounce2.h>           // за отстраняване на притрепването
+#include <arduino-timer.h>     // Таймер 
 
+#define DEBUG 1
 
 //ВХОДОВЕ
 const byte one_wire_bus=11; // Датчик за вътрешна температура DS18B20 
@@ -20,10 +21,10 @@ const byte otg_relay_pin=8;  // Управлемие OTG режим
 const byte fan_relay_pin=9;  // Управление на вентилатора
 
 // други константи
-const float tempMax = 50;      // над тази темепратура вкл.вентилатора
-const int checkACC = 2UL;      // секунди през които да се проверява за АCC
-const int powerUSB = 4UL;      // секуди след. които се подава захранване на USB хъба
-const int checkTemp= 2UL;     // интервал в секунди за измерване на температурата
+const float tempMax = 50;    // над тази темепратура вкл.вентилатора
+const int checkACC  = 2;     // секунди през които да се проверява за АCC
+const int powerUSB  = 4;     // секуди след. които се подава захранване на USB хъба
+const int checkTemp = 10;    // интервал в секунди за измерване на температурата
 
 //променливи
 boolean accOn  = false;       // ACC на колата
@@ -70,7 +71,7 @@ void setup(void)
 
   //таймер за АЦЦ през checkACC секунди
   timer.every(1000UL*checkACC, ACC_Control);
-  
+  if(DEBUG)Serial.println("SETUP COMPELTE"); 
  
 }
  
@@ -84,14 +85,14 @@ void loop(void){
 //извършва се на всеки checkACC секунди
 bool ACC_Control(void *)
 {
-  Serial.println("ACC CHECK STARTED"); 
+  if(DEBUG)Serial.println("ACC CHECK STARTED"); 
   ACCInput.update() ;          // Сигурно ли е вклчен
   int accVal = ACCInput.read(); 
  
   if ( accVal == LOW) // логиката е обратна HIGH=ACC OFF
   {
     // действията се изпълняват ако колата е устойчиво вклчена    
-    Serial.println("ACC ON"); 
+    if(DEBUG)Serial.println("ACC ON"); 
     accOn = true; 
     //събуждаме таблета
     if(!IsOn){
@@ -100,7 +101,7 @@ bool ACC_Control(void *)
         USB_Off = timer.at(millis()+powerUSB*1000UL,  powerOnUSB );   
         //2.започваме да проверяваме температурата през checkTemp секунди
         chk_Temp= timer.every(millis()+checkTemp*1000UL, checkTemperature);  
-        Serial.println("Task created.");         
+        if(DEBUG)Serial.println("TASKS STARTED.");         
         HALL_On(); 
         //започват периодичните задачи taskUSB, taskTemp
         IsOn = true;        
@@ -111,7 +112,7 @@ bool ACC_Control(void *)
   {
     // колата е загасена
     accOn = false;
-    Serial.println("ACC OFF"); 
+    if(DEBUG)Serial.println("ACC OFF"); 
 
     // действията се изпълнавата само, ако вече не са изпълнени
     // гасим периферията      
@@ -119,7 +120,7 @@ bool ACC_Control(void *)
       //анулираме периодичните задачи
       timer.cancel(chk_Temp); 
       timer.cancel(USB_Off);   
-      Serial.println("Task canceled.");      
+      if(DEBUG)Serial.println("TASKS CANCELED.");      
       // гасим таблета
       powerOffUSB();
       // спираме вентилатора
@@ -138,8 +139,10 @@ bool ACC_Control(void *)
 
 bool checkTemperature(void *){
      tempC = temp_sensor.getTempCByIndex(0); //може да има повече от един сензор. затова питаме по индекс
-     Serial.print("Celsius temperature: ");     
-     Serial.println(tempC);  
+     if(DEBUG){
+        Serial.print("Celsius temperature: ");     
+        Serial.println(tempC);
+       }; 
      if (tempC>tempMax){
        powerOnFAN();        
       }
@@ -153,53 +156,53 @@ bool checkTemperature(void *){
 
 void HALL_On(){  
       digitalWrite(hall_relay_pin, HIGH);
-      Serial.println("HALL ON"); 
+      if(DEBUG)Serial.println("HALL ON"); 
     } ;
 
 void HALL_Off(){ 
       digitalWrite(hall_relay_pin, LOW);
-      Serial.println("HALL OFF"); 
+      if(DEBUG)Serial.println("HALL OFF"); 
     }  ;
 void OTG_On(){  
       digitalWrite(otg_relay_pin, HIGH);
-      Serial.println("OTG ON"); 
+      if(DEBUG)Serial.println("OTG ON"); 
     } ;
 
 void OTG_Off(){ 
       digitalWrite(otg_relay_pin, LOW);
-      Serial.println("OTG OFF"); 
+      if(DEBUG)Serial.println("OTG OFF"); 
     }  ;
 
 void powerOnCamera(){ 
       digitalWrite(cam_power_pin, HIGH);
-      Serial.println("CAMERA ON");
+      if(DEBUG)Serial.println("CAMERA ON");
  
     } ;
 
 void powerOffCamera(){ 
       digitalWrite(cam_power_pin, LOW);
-      Serial.println("CAMERA OFF");
+      if(DEBUG)Serial.println("CAMERA OFF");
    
     }  ;
 
 void powerOnFAN(){ 
       digitalWrite(fan_relay_pin, HIGH);
-      Serial.println("FAN ON"); 
+      if(DEBUG)Serial.println("FAN ON"); 
     } ;
 
 void powerOffFAN(){ 
       digitalWrite(fan_relay_pin, LOW);
-      Serial.println("FAN OFF");    
+      if(DEBUG)Serial.println("FAN OFF");    
     } ;  
     
 bool  powerOnUSB(void *){ 
       digitalWrite(usbPowerPin, HIGH); 
-      Serial.println("USB ON"); 
+      if(DEBUG)Serial.println("USB ON"); 
       return false; // изпълнява се един път
     } ;
 
 void powerOffUSB(){ 
       digitalWrite(usbPowerPin, LOW); 
-      Serial.println("USB OFF"); 
+      if(DEBUG)Serial.println("USB OFF"); 
  
     }  ;   
