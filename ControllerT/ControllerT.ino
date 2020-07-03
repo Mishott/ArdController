@@ -25,6 +25,7 @@ const float tempMax = 50;    // над тази темепратура вкл.в
 const int checkACC  = 2;     // секунди през които да се проверява за АCC
 const int powerUSB  = 4;     // секуди след. които се подава захранване на USB хъба
 const int checkTemp = 10;    // интервал в секунди за измерване на температурата
+const int TabletOn = 2;      // секунди след подаване на АЦЦ се вкл таблета
 
 //променливи
 boolean accOn  = false;       // ACC на колата
@@ -44,6 +45,7 @@ Bounce ACCInput = Bounce();
 auto timer  = timer_create_default(); 
 Timer<>::Task chk_Temp;
 Timer<>::Task USB_Off; 
+Timer<>::Task Hall_On; 
 
 void setup(void)
 {
@@ -96,14 +98,18 @@ bool ACC_Control(void *)
     accOn = true; 
     //събуждаме таблета
     if(!IsOn){
-        // създаваме периодичните задачи
-        //1. включваме периферията след powerUSB секунди  
+        
+        //1.след TabletOn секунди се събужда таблета
+        Hall_On = timer.at(millis()+TabletOn*1000UL,  HALL_On );  
+       
+        //2. включваме периферията след powerUSB секунди  
         USB_Off = timer.at(millis()+powerUSB*1000UL,  powerOnUSB );   
-        //2.започваме да проверяваме температурата през checkTemp секунди
+      
+        //3.започваме да проверяваме температурата през checkTemp секунди
         chk_Temp= timer.every(millis()+checkTemp*1000UL, checkTemperature);  
         if(DEBUG)Serial.println("TASKS STARTED.");         
-        HALL_On(); 
-        //започват периодичните задачи taskUSB, taskTemp
+      
+        //започват периодичните задачи  taskTemp
         IsOn = true;        
       }       
    
@@ -154,9 +160,10 @@ bool checkTemperature(void *){
   };
  
 
-void HALL_On(){  
+bool HALL_On(void *){  
       digitalWrite(hall_relay_pin, HIGH);
       if(DEBUG)Serial.println("HALL ON"); 
+      return false; // изпълнява се един път
     } ;
 
 void HALL_Off(){ 
