@@ -7,30 +7,51 @@
 #include <Bounce2.h>           // за отстраняване на притрепването
 #include <arduino-timer.h>     // Таймер 
 
+
+// макроси за определяне на изминали дни
+/* Useful Constants */
+#define SECS_PER_MIN  (60UL)
+#define SECS_PER_HOUR (3600UL)
+#define SECS_PER_DAY  (SECS_PER_HOUR * 24L)
+
+/* Useful Macros for getting elapsed time */
+//#define numberOfSeconds(_time_) (_time_ % SECS_PER_MIN)  
+//#define numberOfMinutes(_time_) ((_time_ / SECS_PER_MIN) % SECS_PER_MIN)
+//#define numberOfHours(_time_) (( _time_% SECS_PER_DAY) / SECS_PER_HOUR)
+#define elapsedDays(_time_) ( _time_ / SECS_PER_DAY) 
+
 #define DEBUG 1
 
 //ВХОДОВЕ
-const byte one_wire_bus=11; // Датчик за вътрешна температура DS18B20 
-const byte acc_pin=10 ;     // Датчик за ACC режим(ключа за запалване е в ACC +12V)
+const byte one_wire_bus=8; // Датчик за вътрешна температура DS18B20 
+const byte acc_pin=7 ;     // Датчик за ACC режим(ключа за запалване е в ACC +12V)
 
 //ИЗХОДИ
-const byte hall_relay_pin=5; // Управление на събуждане на таблета 
+const byte hall_relay_pin=3; // Управление на събуждане на таблета 
 const byte usbPowerPin=6;    // захранвама USB HUB
-const byte cam_power_pin=7;  // захранване на камера
-const byte otg_relay_pin=8;  // Управлемие OTG режим 
-const byte fan_relay_pin=9;  // Управление на вентилатора
+const byte cam_power_pin=8;  // захранване на камера
+const byte otg_relay_pin=4;  // Управлемие OTG режим 
+const byte fan_relay_pin=2;  // Управление на вентилатора
 
-// други константи
-const float tempMax = 50;    // над тази темепратура вкл.вентилатора
-const int checkACC  = 2;     // секунди през които да се проверява за АCC
-const int powerUSB  = 4;     // секуди след. които се подава захранване на USB хъба
-const int checkTemp = 10;    // интервал в секунди за измерване на температурата
-const int TabletOn = 2;      // секунди след подаване на АЦЦ се вкл таблета
+//темепратура
+const float tempMax   = 50;    // над тази темепратура вкл.вентилатора
+
+// таймаути
+const int checkACC    = 2UL;   // секунди през които да се проверява за АCC
+const int powerUSB    = 4UL;   // секуди след. които се подава захранване на USB хъба
+const int checkTemp   = 10UL;  // интервал в секунди за измерване на температурата
+const int TabletOn    = 2UL;   // секунди след подаване на АЦЦ се вкл таблета
+const int daysToOFF   = 2UL;   // дни след, които юе бъде изкл.всичко, ако не е подаван сигнал ACC
+const int shutdowafter= 2UL;   // секунид след acc=0 гаси всичко
+
 
 //променливи
 boolean accOn  = false;       // ACC на колата
 boolean IsOn = false;         // всички у-ва са включени
 float tempC = 0;              // текуща температура 
+boolean testMode = false;     // включен тестов режим
+String recdata="";            // стринг от rs232    
+DeviceAddress insideTempSensor;// масив с адреси на темп.датчик
 
 // комуникация с датчика за температура
 OneWire oneWire(one_wire_bus); 
@@ -44,8 +65,15 @@ Bounce ACCInput = Bounce();
 //Таймер 
 auto timer  = timer_create_default(); 
 Timer<>::Task chk_Temp;
-Timer<>::Task USB_Off; 
-Timer<>::Task Hall_On; 
+Timer<>::Task USB_On; 
+Timer<>::Task Hall_On;  
+Timer<>::Task start_Off;  //процедуреа по спиране на периферията
+
+
+//кога последно е изключен двигатела - използва се за да изгаси всичко след
+//определен интервал от време daysToOFF
+long int ACCDaysOff = 0;
+long int LastMilis = 0; //последно мерене за ACCDaysOff
 
 void setup(void)
 {
@@ -53,7 +81,7 @@ void setup(void)
   Serial.begin(9600);
   //подкарваме вход ACC
   pinMode(acc_pin,INPUT);                 // Включваме PULLUP резистор. (Другия край е на маса)        
-  ACCInput.attach(acc_pin,INPUT_PULLUP);  // добавяме Bounce.
+  ACCInput.attach(acc_pin);  // добавяме Bounce.
   ACCInput.interval(50);                  // Не трябва да реагира на контакт под 50мс
 
   //подкарваме изходите
@@ -70,7 +98,9 @@ void setup(void)
   
   //подкарваме датчик за вътрешна температура
   temp_sensor.begin();
-
+  if (!temp_sensor.getAddress(insideTempSensor, 0)) Serial.println("Unable to find address for Device 0");   
+  temp_sensor.setResolution(insideTempSensor, 10);
+  
   //таймер за АЦЦ през checkACC секунди
   timer.every(1000UL*checkACC, ACC_Control);
   if(DEBUG)Serial.println("SETUP COMPELTE"); 
@@ -78,8 +108,10 @@ void setup(void)
 }
  
 
-void loop(void){     
+void loop(void){   
+ 
   timer.tick(); //обновява таймера 
+ 
 }
 
 
@@ -87,26 +119,27 @@ void loop(void){
 //извършва се на всеки checkACC секунди
 bool ACC_Control(void *)
 {
-  if(DEBUG)Serial.println("ACC CHECK STARTED"); 
   ACCInput.update() ;          // Сигурно ли е вклчен
   int accVal = ACCInput.read(); 
  
   if ( accVal == LOW) // логиката е обратна HIGH=ACC OFF
   {
-    // действията се изпълняват ако колата е устойчиво вклчена    
-    if(DEBUG)Serial.println("ACC ON"); 
+    // действията се изпълняват ако колата е устойчиво вклчена        
     accOn = true; 
     //събуждаме таблета
     if(!IsOn){
+        if(DEBUG)Serial.println("START UP"); 
+        //0. спираме процеса на гасене (ако е започнал)
+        timer.cancel(start_Off);
         
         //1.след TabletOn секунди се събужда таблета
-        Hall_On = timer.at(millis()+TabletOn*1000UL,  HALL_On );  
+        Hall_On = timer.at(millis()+TabletOn*1000,  HALL_start );  
        
         //2. включваме периферията след powerUSB секунди  
-        USB_Off = timer.at(millis()+powerUSB*1000UL,  powerOnUSB );   
+        USB_On = timer.at(millis()+powerUSB*1000,  powerOnUSB );   
       
         //3.започваме да проверяваме температурата през checkTemp секунди
-        chk_Temp= timer.every(millis()+checkTemp*1000UL, checkTemperature);  
+        chk_Temp= timer.every(checkTemp*1000, checkTemperature);  
         if(DEBUG)Serial.println("TASKS STARTED.");         
       
         //започват периодичните задачи  taskTemp
@@ -118,15 +151,24 @@ bool ACC_Control(void *)
   {
     // колата е загасена
     accOn = false;
-    if(DEBUG)Serial.println("ACC OFF"); 
-
     // действията се изпълнавата само, ако вече не са изпълнени
-    // гасим периферията      
-    if(IsOn){
-      //анулираме периодичните задачи
+    // гасим периферията     
+    start_Off= timer.at(millis()+shutdowafter*1000UL,  shutdow_all ); 
+ 
+  }; 
+ return true;
+};
+
+
+bool shutdow_all(void *){
+  if(IsOn){
+     if(DEBUG)Serial.println("SHUTDOWN STARTED"); 
+      //анулираме  задачи
       timer.cancel(chk_Temp); 
-      timer.cancel(USB_Off);   
-      if(DEBUG)Serial.println("TASKS CANCELED.");      
+      timer.cancel(USB_On);  
+      timer.cancel(Hall_On);
+      
+      if(DEBUG)Serial.println("-TASKS CANCELED.");      
       // гасим таблета
       powerOffUSB();
       // спираме вентилатора
@@ -136,17 +178,19 @@ bool ACC_Control(void *)
       // изключваме режим OTG
       OTG_Off();
       // приспиваме таблета
-      HALL_Off();
+      HALL_stop();
       IsOn = false;
-    }
-  }; 
- return true;
-};
+    }  
+    return false;// еднократно се изпълнява
+}
+
+
 
 bool checkTemperature(void *){
-     tempC = temp_sensor.getTempCByIndex(0); //може да има повече от един сензор. затова питаме по индекс
+     temp_sensor.requestTemperatures(); //може да има повече от един сензор. затова питаме по индекс
+     tempC = temp_sensor.getTempC(insideTempSensor);
      if(DEBUG){
-        Serial.print("Celsius temperature: ");     
+        Serial.print("-Temp C: ");     
         Serial.println(tempC);
        }; 
      if (tempC>tempMax){
@@ -154,62 +198,107 @@ bool checkTemperature(void *){
       }
      else
      {
-        powerOnFAN();      
+        powerOffFAN();      
       }
      return true;      
   };
  
 
-bool HALL_On(void *){  
+bool HALL_start(void *){  
       digitalWrite(hall_relay_pin, HIGH);
-      if(DEBUG)Serial.println("HALL ON"); 
+      if(DEBUG)Serial.println("-HALL ON"); 
       return false; // изпълнява се един път
     } ;
 
-void HALL_Off(){ 
+void HALL_stop(){ 
       digitalWrite(hall_relay_pin, LOW);
-      if(DEBUG)Serial.println("HALL OFF"); 
+      if(DEBUG)Serial.println("-HALL OFF"); 
     }  ;
 void OTG_On(){  
       digitalWrite(otg_relay_pin, HIGH);
-      if(DEBUG)Serial.println("OTG ON"); 
+      if(DEBUG)Serial.println("-OTG ON"); 
     } ;
 
 void OTG_Off(){ 
       digitalWrite(otg_relay_pin, LOW);
-      if(DEBUG)Serial.println("OTG OFF"); 
+      if(DEBUG)Serial.println("-OTG OFF"); 
     }  ;
 
 void powerOnCamera(){ 
       digitalWrite(cam_power_pin, HIGH);
-      if(DEBUG)Serial.println("CAMERA ON");
+      if(DEBUG)Serial.println("-CAMERA ON");
  
     } ;
 
 void powerOffCamera(){ 
       digitalWrite(cam_power_pin, LOW);
-      if(DEBUG)Serial.println("CAMERA OFF");
+      if(DEBUG)Serial.println("-CAMERA OFF");
    
     }  ;
 
 void powerOnFAN(){ 
       digitalWrite(fan_relay_pin, HIGH);
-      if(DEBUG)Serial.println("FAN ON"); 
+      if(DEBUG)Serial.println("-FAN ON"); 
     } ;
 
 void powerOffFAN(){ 
       digitalWrite(fan_relay_pin, LOW);
-      if(DEBUG)Serial.println("FAN OFF");    
+      if(DEBUG)Serial.println("-FAN OFF");    
     } ;  
     
 bool  powerOnUSB(void *){ 
       digitalWrite(usbPowerPin, HIGH); 
-      if(DEBUG)Serial.println("USB ON"); 
+      if(DEBUG)Serial.println("-USB ON"); 
       return false; // изпълнява се един път
     } ;
 
 void powerOffUSB(){ 
       digitalWrite(usbPowerPin, LOW); 
-      if(DEBUG)Serial.println("USB OFF"); 
+      if(DEBUG)Serial.println("-USB OFF"); 
  
     }  ;   
+
+// ако двигателя е изключен брои дните, ако е вкл. нулира бряча
+void time(long val){  
+  if(!IsOn){
+    ACCDaysOff = elapsedDays(val); 
+    if(DEBUG)Serial.print("-ACCDaysOff: ");    
+    if(DEBUG)Serial.println(ACCDaysOff);
+  }
+  else {
+      ACCDaysOff = 0;
+    };   
+}    
+
+ 
+
+void self_test(){
+  int v = 0;
+    powerOnUSB(&v);
+    delay(500);
+    powerOffUSB();
+    delay(500);
+    
+    powerOnFAN();
+    delay(500);
+    powerOnFAN();
+    delay(500);
+
+    powerOnCamera();
+    delay(500);
+    powerOffCamera();
+    delay(500);
+    
+    OTG_On();
+    delay(500);
+    OTG_Off();
+    delay(500);  
+
+    HALL_start(&v);
+    delay(500);
+    HALL_stop();
+    delay(500); 
+
+    checkTemperature(&v);
+      
+  }
